@@ -68,6 +68,9 @@ h2.sec .n{font-family:var(--f-mono);font-weight:500}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex:none}
 .seg button{border:0;background:var(--surface);min-height:38px;min-width:48px;padding:0 10px;font-size:13px;font-weight:600;color:var(--muted);border-right:1px solid var(--line);cursor:pointer}
 .seg button:last-child{border-right:0}
+.seg.big{display:flex;width:100%}
+.seg.big button{flex:1;min-height:44px;font-size:14px}
+.seg button.on[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
 .seg button[aria-pressed="true"].have{background:var(--accent-soft);color:var(--accent)}
 .seg button[aria-pressed="true"].low{background:var(--warn-soft);color:var(--warn)}
 .seg button[aria-pressed="true"].out{background:var(--bad-soft);color:var(--bad)}
@@ -346,16 +349,17 @@ function weekDays(){const t=today();return Array.from({length:7},(_,i)=>addDays(
 const dayLabel=(d,i)=>(i===0?'Today':i===1?'Tomorrow':DOW[d.getDay()])+'<br>'+fmtShort(d);
 function dueSoonCount(){const t=today();return S.chores.filter(c=>{const s=choreState(c,t);return s.kind==='overdue'||diffDays(s.sort,t)<=7}).length}
 function findItem(tk){return S.items.find(it=>tokMatch(tk,nameTokens(it.name)))}
-function addToList(name){
+function findExact(tk){return S.items.find(it=>{const b=nameTokens(it.name);return b.length===tk.length&&tk.every(x=>b.includes(x))})}
+function addToList(name,loose){
   const tk=nameTokens(name); if(!tk.length) return 'none';
-  const it=findItem(tk);
+  const it=loose?findItem(tk):findExact(tk);
   if(it){ if(it.status==='out') return 'already'; put('items',Object.assign({},it,{status:'out'})); return 'marked'; }
   const label=name.trim().charAt(0).toUpperCase()+name.trim().slice(1);
   put('items',{id:uid(),name:label,cat:catGuess(label),status:'out'}); return 'new';
 }
 function addMissing(lines){
   let n=0; const seen=new Set();
-  lines.forEach(l=>{const lab=ingLabel(l); if(seen.has(lab.toLowerCase())) return; seen.add(lab.toLowerCase()); if(addToList(lab)!=='already') n++;});
+  lines.forEach(l=>{const lab=ingLabel(l); if(seen.has(lab.toLowerCase())) return; seen.add(lab.toLowerCase()); if(addToList(lab,true)!=='already') n++;});
   return n;
 }
 
@@ -396,7 +400,7 @@ function viewDinner(){
 }
 function viewShop(){
   const need=S.items.filter(i=>i.status!=='have');
-  let h='<form class="addbar" id="f-shop"><input id="in-shop" placeholder="Add to list, e.g. chickpeas" autocomplete="off" enterkeyhint="done"><button class="btn primary" type="submit">Add</button></form>';
+  let h='<form class="addbar" id="f-shop"><input id="in-shop" placeholder="Add to list, e.g. chickpeas" autocomplete="off" enterkeyhint="done"><button class="btn primary" type="button" data-act="addshop" data-keepfocus="1">Add</button></form>';
   if(!need.length) return h+'<div class="list"><div class="empty"><b>List is empty</b>Mark something Low or Out in Pantry and it shows up here.</div></div>';
   CATS.forEach(c=>{
     const g=need.filter(i=>(i.cat||'Other')===c).sort((a,b)=>a.name.localeCompare(b.name)); if(!g.length) return;
@@ -406,7 +410,7 @@ function viewShop(){
   return h+'<div class="note">Tick an item when it is in the cart. It goes back to Have in Pantry.</div>';
 }
 function viewPantry(){
-  let h='<form class="addbar" id="f-pantry"><input id="in-pantry" placeholder="Add something you have" autocomplete="off" enterkeyhint="done"><button class="btn primary" type="submit">Add</button></form>';
+  let h='<form class="addbar" id="f-pantry"><input id="in-pantry" placeholder="Add something you have" autocomplete="off" enterkeyhint="done"><button class="btn primary" type="button" data-act="addpantry" data-keepfocus="1">Add</button></form>';
   if(!S.items.length) return h+'<div class="list"><div class="empty"><b>Nothing here yet</b>Add what is in your kitchen. Low and Out items go to the shopping list.</div></div>';
   CATS.forEach(c=>{
     const g=S.items.filter(i=>(i.cat||'Other')===c).sort((a,b)=>a.name.localeCompare(b.name)); if(!g.length) return;
@@ -427,11 +431,17 @@ function viewRecipes(){
   if(!rows.length) return h+'<div class="note">No recipe matches that search.</div>';
   return h+'<div class="list" style="margin-top:10px">'+rows.map(r=>{const i=recipeInfo(r,pt,st);return recRow(r,i,i.blocked?'':(i.missing.length?'Need '+i.missing.length:'Ready to cook'))}).join('')+'</div>';
 }
+const hkind=()=>S.hk==='chore'?'chore':'maintenance';
+const kindOf=c=>c.kind==='chore'?'chore':'maintenance';
+function saveHk(){try{localStorage.setItem('hkn-hk',S.hk)}catch(_){}}
+function dueIn(kind){const t=today();return S.chores.filter(c=>kindOf(c)===kind).filter(c=>{const s=choreState(c,t);return s.kind==='overdue'||diffDays(s.sort,t)<=7}).length}
 function viewHouse(){
-  const t=today();
-  let h='<div class="acts" style="margin:0 0 4px"><button class="btn primary" data-act="newchore">Add task</button><button class="btn" data-act="bulkchore">Paste a list</button><button class="btn" data-act="ics">Calendar file</button></div>';
-  if(!S.chores.length) return h+'<div class="list" style="margin-top:10px"><div class="empty"><b>No house tasks yet</b>Use Paste a list to bring in your existing maintenance list, one task per line.</div></div>';
-  const all=S.chores.map(c=>({c,s:choreState(c,t)})).sort((a,b)=>a.s.sort-b.s.sort||a.c.name.localeCompare(b.c.name));
+  const t=today(), k=hkind(), mine=S.chores.filter(c=>kindOf(c)===k);
+  const seg=['maintenance','chore'].map(x=>'<button class="on" data-act="hk" data-k="'+x+'" aria-pressed="'+(x===k)+'">'+(x==='chore'?'Chores':'Maintenance')+(dueIn(x)?' · '+dueIn(x):'')+'</button>').join('');
+  let h='<div class="seg big" role="group" aria-label="Task type" style="margin:0 0 10px">'+seg+'</div>'+
+    '<div class="acts" style="margin:0 0 4px"><button class="btn primary" data-act="newchore">Add task</button><button class="btn" data-act="bulkchore">Paste a list</button><button class="btn" data-act="ics">Calendar file</button></div>';
+  if(!mine.length) return h+'<div class="list" style="margin-top:10px"><div class="empty"><b>No '+(k==='chore'?'chores':'maintenance tasks')+' yet</b>Use Paste a list to bring in your list, one task per line.</div></div>';
+  const all=mine.map(c=>({c,s:choreState(c,t)})).sort((a,b)=>a.s.sort-b.s.sort||a.c.name.localeCompare(b.c.name));
   const groups=[['overdue','Overdue'],['soon','Next two weeks'],['later','Later']];
   groups.forEach(([k,title])=>{
     const g=all.filter(x=>x.s.kind===k); if(!g.length) return;
@@ -441,7 +451,7 @@ function viewHouse(){
       '<div class="s">'+esc(x.s.sub)+(x.c.example?' <span class="tag">Example</span>':'')+'</div></button>'+
       '<span class="mono" style="text-align:right;flex:none;max-width:42%;'+(k==='overdue'?'color:var(--bad)':k==='soon'?'color:var(--warn)':'color:var(--muted)')+'">'+esc(x.s.label)+'</span></div>').join('')+'</div>';
   });
-  return h+'<div class="note">Tick the circle when a task is done. Open a task to add it to Google Calendar, or use Calendar file to export all of them.</div>';
+  return h+'<div class="note">Tick the circle when a task is done. Open a task to add it to Google Calendar, or use Calendar file to export this list.</div>';
 }
 
 /* ================= sheets ================= */
@@ -510,6 +520,7 @@ function openChoreForm(id){
   let cal=''; if(id){const x=gcalUrl(c,t); cal='<a class="btn" href="'+esc(x)+'" target="_blank" rel="noopener">Add to Google Calendar</a>';}
   openSheet(closeBtn+'<h2>'+(id?'Edit task':'Add task')+'</h2>'+
     '<div class="field"><label for="c-name">Task</label><input id="c-name" value="'+esc(c.name||'')+'" autocomplete="off"></div>'+
+    '<div class="field"><label for="c-kind">Type</label><select id="c-kind">'+opt([['maintenance','Maintenance'],['chore','Chore']],id?kindOf(c):hkind())+'</select></div>'+
     '<div class="field"><label for="c-type">Repeats</label><select id="c-type">'+opt([['interval','On a fixed interval'],['seasonal','In a season or month window']],c.type)+'</select></div>'+
     '<div id="g-int"'+(c.type==='seasonal'?' hidden':'')+'><div class="pair"><div class="field"><label for="c-every">Every</label><input id="c-every" type="number" inputmode="numeric" min="1" value="'+esc(c.every||3)+'"></div>'+
     '<div class="field"><label for="c-unit">Unit</label><select id="c-unit">'+opt([['days','days'],['weeks','weeks'],['months','months'],['years','years']],c.unit||'months')+'</select></div></div>'+
@@ -525,7 +536,8 @@ function openChoreForm(id){
 function openBulk(msg){
   openSheet(closeBtn+'<h2>Paste your task list</h2><div class="note">One task per line. Put the timing after a bar, or at the end of the line.</div>'+
     '<div class="note mono" style="line-height:1.6">Furnace filter | every 3 months<br>Clean eavestroughs | Sep-Oct<br>Test smoke alarms, every 6 months<br>Winterize hose bibs fall</div>'+
-    '<div class="field" style="margin-top:10px"><label for="f-bulk">Tasks</label><textarea id="f-bulk" style="min-height:180px"></textarea></div>'+(msg?'<div class="note" style="color:var(--warn)">'+msg+'</div>':'')+
+    '<div class="field" style="margin-top:10px"><label for="f-bkind">Add these as</label><select id="f-bkind"><option value="maintenance"'+(hkind()==='maintenance'?' selected':'')+'>Maintenance</option><option value="chore"'+(hkind()==='chore'?' selected':'')+'>Chores</option></select></div>'+
+    '<div class="field"><label for="f-bulk">Tasks</label><textarea id="f-bulk" style="min-height:180px"></textarea></div>'+(msg?'<div class="note" style="color:var(--warn)">'+msg+'</div>':'')+
     '<div class="note">Interval tasks start one interval from today. Open a task afterwards to set a real next-due date.</div>'+
     '<div class="acts"><button class="btn primary" data-act="savebulk">Add tasks</button></div>');
 }
@@ -587,6 +599,9 @@ document.addEventListener('click',e=>{
     case 'close': closeSheet(); break;
     case 'undo': if(undoFn){undoFn(); undoFn=null} $('#toast').hidden=true; break;
     case 'gear': openSettings(); break;
+    case 'addshop': doAdd('shop'); break;
+    case 'addpantry': doAdd('pantry'); break;
+    case 'hk': S.hk=el.dataset.k==='chore'?'chore':'maintenance'; saveHk(); render(); break;
     case 'stock': if(it){put('items',Object.assign({},it,{status:el.dataset.s})); render()} break;
     case 'bought': if(it){const prev=it.status; put('items',Object.assign({},it,{status:'have'})); render();
       toast('Bought '+it.name,()=>{put('items',Object.assign({},it,{status:prev})); render()})} break;
@@ -619,16 +634,17 @@ document.addEventListener('click',e=>{
     case 'savechore': {
       const name=val('c-name').trim(); if(!name){toast('Give the task a name.'); break}
       const old=S.chores.find(x=>x.id===id)||{}, type=val('c-type');
-      const c={id:id||uid(),name,notes:val('c-notes').trim(),type,done:old.done||'',created:old.created||ymd(t)};
+      const c={id:id||uid(),name,notes:val('c-notes').trim(),type,kind:val('c-kind')==='chore'?'chore':'maintenance',done:old.done||'',created:old.created||ymd(t)};
       if(type==='seasonal'){c.month=+val('c-month')||9; c.span=+val('c-span')||1}
       else {c.every=Math.max(1,parseInt(val('c-every'),10)||1); c.unit=val('c-unit')||'months'; c.next=parseD(val('c-next'))?val('c-next'):ymd(addUnit(t,c.every,c.unit))}
-      put('chores',c); closeSheet(); render(); toast('Task saved'); break}
+      put('chores',c); S.hk=c.kind; saveHk(); closeSheet(); render(); toast('Task saved'); break}
     case 'snooze': if(ch){const base=parseD(ch.next)||t, nx=addDays(base>t?base:t,7); put('chores',Object.assign({},ch,{next:ymd(nx)})); closeSheet(); render(); toast('Snoozed to '+fmtShort(nx))} break;
     case 'delchore': del('chores',id); closeSheet(); render(); break;
     case 'bulkchore': openBulk(); break;
     case 'savebulk': {
-      const bad=[]; let n=0;
-      val('f-bulk').split('\n').forEach(l=>{const c=parseChoreLine(l,t); if(!c) return; if(c.error) bad.push(c.error); else {put('chores',c); n++}});
+      const bad=[], bk=val('f-bkind')==='chore'?'chore':'maintenance'; let n=0;
+      val('f-bulk').split('\n').forEach(l=>{const c=parseChoreLine(l,t); if(!c) return; if(c.error) bad.push(c.error); else {c.kind=bk; put('chores',c); n++}});
+      if(n){S.hk=bk; saveHk()}
       render();
       if(bad.length){openBulk('Added '+n+'. These lines had no timing I could read, so they are still here: add "| every 3 months" or "| Oct" to each.'); document.getElementById('f-bulk').value=bad.join('\n')}
       else {closeSheet(); toast('Added '+n+' task'+(n===1?'':'s'))}
@@ -638,21 +654,28 @@ document.addEventListener('click',e=>{
       S.settings={dislikes:list(val('s-dis')),staples:list(val('s-sta'))}; saveSettings(); closeSheet(); render(); toast('Settings saved'); break}
     case 'backup': downloadBlob(new Blob([JSON.stringify({v:1,items:S.items,recipes:S.recipes,chores:S.chores,plan:S.plan,settings:S.settings},null,1)],{type:'application/json'}),'house-kitchen-backup-'+ymd(t)+'.json'); toast('Backup saved to your downloads'); break;
     case 'restore': $('#f-restore').click(); break;
-    case 'ics': if(!S.chores.length){toast('Add some tasks first.'); break}
-      downloadBlob(new Blob([buildIcs(S.chores,t)],{type:'text/calendar'}),'house-upkeep.ics'); toast('Calendar file saved. Open it to add the events.'); break;
+    case 'ics': {const list=S.chores.filter(c=>kindOf(c)===hkind()); if(!list.length){toast('Add some tasks first.'); break}
+      downloadBlob(new Blob([buildIcs(list,t)],{type:'text/calendar'}),hkind()==='chore'?'house-chores.ics':'house-maintenance.ics'); toast('Calendar file saved. Open it to add the events.'); break}
     case 'clearex': ['items','recipes','chores'].forEach(c=>S[c].filter(x=>x.example).forEach(x=>del(c,x.id)));
       Object.keys(S.plan).forEach(k=>{if(!S.recipes.some(r=>r.id===S.plan[k])) delete S.plan[k]}); savePlan(); closeSheet(); render(); toast('Example data removed'); break;
   }
 });
-document.addEventListener('submit',e=>{
-  e.preventDefault(); const f=e.target.id, inp=document.getElementById(f==='f-shop'?'in-shop':'in-pantry'); if(!inp) return;
-  const v=inp.value.trim(); if(!v) return;
-  if(f==='f-shop'){const r=addToList(v); toast(r==='already'?'Already on the list':'Added '+v)}
-  else {const tk=nameTokens(v), ex=findItem(tk);
-    if(ex) put('items',Object.assign({},ex,{status:'have'})); else put('items',{id:uid(),name:v.charAt(0).toUpperCase()+v.slice(1),cat:catGuess(v),status:'have'});
-    toast(ex?'Marked as have':'Added to pantry')}
-  inp.value=''; render(); const n=document.getElementById(inp.id); if(n) n.focus();
-});
+function doAdd(which){
+  const inp=document.getElementById(which==='shop'?'in-shop':'in-pantry'); if(!inp) return;
+  try{
+    const v=inp.value.trim(); if(!v){toast('Type an item name first.'); inp.focus(); return}
+    if(which==='shop'){const r=addToList(v); if(r==='none'){toast('Type an item name first.'); return} toast(r==='already'?v+' is already on the list':'Added '+v+' to the list')}
+    else {const tk=nameTokens(v); if(!tk.length){toast('Type an item name first.'); return}
+      const ex=findExact(tk);
+      if(ex) put('items',Object.assign({},ex,{status:'have'})); else put('items',{id:uid(),name:v.charAt(0).toUpperCase()+v.slice(1),cat:catGuess(v),status:'have'});
+      toast(ex?ex.name+' is already in your pantry. Marked as have.':'Added '+v+' to your pantry')}
+    inp.value=''; render(); const n=document.getElementById(inp.id); if(n) n.focus();
+  }catch(err){toast('Could not add that: '+(err&&err.message||'unknown error'))}
+}
+document.addEventListener('submit',e=>{e.preventDefault(); doAdd(e.target.id==='f-shop'?'shop':'pantry')});
+document.addEventListener('mousedown',e=>{if(e.target.closest('[data-keepfocus]')) e.preventDefault()});
+window.addEventListener('error',e=>toast('Error: '+(e.message||'unknown')));
+window.addEventListener('unhandledrejection',e=>toast('Error: '+((e.reason&&e.reason.message)||'unknown')));
 document.addEventListener('input',e=>{if(e.target.id==='in-rsearch'){S.rq=e.target.value; render()}});
 document.addEventListener('change',e=>{if(e.target.id==='c-type'){const s=e.target.value==='seasonal'; document.getElementById('g-int').hidden=s; document.getElementById('g-sea').hidden=!s}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape') closeSheet()});
@@ -674,7 +697,7 @@ restoreInput.addEventListener('change',()=>{
   }).catch(()=>toast('That file is not a valid backup.')).finally(()=>{restoreInput.value=''});
 });
 (function boot(){
-  try{const tb=localStorage.getItem('hkn-tab'); if(VIEWS[tb]) S.tab=tb}catch(_){}
+  try{const tb=localStorage.getItem('hkn-tab'); if(VIEWS[tb]) S.tab=tb; if(localStorage.getItem('hkn-hk')==='chore') S.hk='chore'}catch(_){}
   cacheLoad(); S.ready=true;
   const g=document.createElement('button'); g.className='btn small'; g.textContent='Settings'; g.dataset.act='gear';
   g.style.cssText='position:absolute;right:0;top:20px'; const top=document.querySelector('.top'); top.style.position='relative'; top.appendChild(g);
